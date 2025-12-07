@@ -1,0 +1,138 @@
+## Essential terminal commands for working only with text files (Linux/macOS)
+
+### Create & write
+- **touch** — create empty file  
+  touch file.txt
+- **echo** — append or write a line  
+  echo "line" > file.txt   (overwrite)  
+  echo "line" >> file.txt  (append)
+- **printf** — formatted write  
+  printf "a\tb\n" > file.txt
+
+### View & paginate
+- **cat** — show whole file  
+  cat file.txt
+- **tac** — reverse file output  
+  tac file.txt
+- **nl** — number lines  
+  nl file.txt
+- **less** — paginate (scroll, search)  
+  less file.txt
+- **more** — simple pager  
+  more file.txt
+- **head / tail** — start/end lines  
+  head -n 20 file.txt  
+  tail -n 50 file.txt  
+  tail -f file.txt   (follow new lines)
+
+### Edit (terminal editors)
+- **nano** — easy terminal editor  
+  nano file.txt
+- **vi / vim** — modal editor (advanced)  
+  vim file.txt
+- **ed / sed -i** — scripted inline edits  
+  sed -i 's/old/new/g' file.txt
+
+### Search & match
+- **grep** — search lines matching pattern  
+  grep 'pattern' file.txt  
+  grep -R --include='*.txt' 'pattern' .  
+  grep -n 'pattern' file.txt   (show line numbers)
+- **egrep / fgrep** (or grep -E / -F) — extended / fixed patterns
+- **awk** — field-aware processing  
+  awk '/pattern/ {print $1, $3}' file.txt
+- **sed** — stream editor for transforms  
+  sed -n '1,100p' file.txt
+- **ripgrep (rg)** — faster recursive grep (if installed)  
+  rg 'pattern' .
+
+### Count & stats
+- **wc** — count lines/words/bytes  
+  wc -l file.txt   (lines)  
+  wc -w file.txt   (words)  
+  wc -c file.txt   (bytes)
+- **stat** — file metadata  
+  stat file.txt
+
+### Split & join
+- **split** — break into chunks  
+  split -b 10M large.txt part_
+- **csplit** — split by patterns  
+  csplit file.txt '/^Chapter/' '{*}'
+- **paste** — join columns from files  
+  paste a.txt b.txt > combined.txt
+- **cat** — join files  
+  cat part_* > whole.txt
+
+### Transform & format
+- **tr** — translate/delete characters  
+  tr '[:upper:]' '[:lower:]' < file.txt > lower.txt
+- **cut** — extract columns/fields  
+  cut -d',' -f1,3 file.csv
+- **column** — align columns into table  
+  column -t file.txt
+- **sort / uniq** — sort and deduplicate  
+  sort file.txt > sorted.txt  
+  sort file.txt | uniq > unique.txt  
+  sort -u file.txt
+- **join** — join two files on a common field  
+  join -t',' a.txt b.txt
+
+### Replace & batch-edit
+- **sed** — inline substitution  
+  sed -i.bak 's/old/new/g' *.txt
+- **perl** — powerful in-place edits  
+  perl -i.bak -pe 's/old/new/g' *.txt
+
+### Encoding & conversion
+- **iconv** — change encoding  
+  iconv -f WINDOWS-1252 -t UTF-8 file.txt > out.txt
+- **recode** — alternate encoder
+
+### Compression & archiving (text-only workflows)
+- **gzip / gunzip** — compress/uncompress .gz  
+  gzip file.txt
+- **bzip2 / bunzip2** — .bz2 compression
+- **xz / unxz** — .xz compression
+- **tar** — archive multiple text files (optionally compressed)  
+  tar -cvf archive.tar *.txt  
+  tar -czvf archive.tar.gz *.txt
+
+### Transfer & remote edit
+- **scp** — copy files over SSH  
+  scp file.txt user@host:/path/
+- **rsync** — efficient sync (preserve, compress)  
+  rsync -avz --progress file.txt user@host:/path/
+- **ssh** — remote shell (edit remote files)  
+  ssh user@host 'nano /path/file.txt'
+
+### File permissions & ownership
+- **chmod** — change permissions  
+  chmod 644 file.txt
+- **chown** — change owner/group  
+  chown user:group file.txt
+
+### Monitoring & file changes
+- **inotifywait** (Linux) — watch file events  
+  inotifywait -m file.txt
+- **fswatch** (macOS/Linux) — cross-platform watcher
+
+### Safe editing & backups
+- **cp** — backup before edits  
+  cp file.txt file.txt.bak
+- Use editors' backup flags (vim: set backup) or sed -i.bak
+
+### Useful short pipelines (examples)
+- Show most common lines:
+  sort file.txt | uniq -c | sort -nr | head
+- Replace tabs with commas:
+  tr '\t' ',' < file.txt > out.csv
+- Extract CSV column, unique, count:
+  cut -d',' -f2 file.csv | sort | uniq -c | sort -nr
+
+### Tips
+- Prefer UTF-8: iconv to convert non-UTF-8 files.
+- Use version control (git) for safe text-file history.
+- Combine small tools (grep, awk, sed, sort) for powerful one-liners.
+
+If you want a printable one-page cheat-sheet or commands tailored for BusyBox, Windows WSL, or specific tasks (CSV, logs, coding), say which and I’ll produce it.

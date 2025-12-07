@@ -1,0 +1,460 @@
+## MySQL — comprehensive commands for users and privileges
+
+Save this as mysql-users-cheatsheet.md. Run commands inside mysql client (mysql -u root -p) or prefix with sudo mysql -e 'SQL' for Linux system installations that use socket auth.
+
+### Connect
+- Interactive:
+  ```
+  mysql -u root -p
+  ```
+- As system root (socket auth):
+  ```
+  sudo mysql
+  ```
+
+### Show users and authentication
+- List users and hosts:
+  ```
+  SELECT User, Host, plugin, authentication_string FROM mysql.user;
+  ```
+- Show a specific user's grants:
+  ```
+  SHOW GRANTS FOR 'alice'@'localhost';
+  ```
+
+### Create user
+- With password (MySQL 8+ recommended syntax):
+  ```
+  CREATE USER 'alice'@'%' IDENTIFIED BY 'Str0ngP@ssw0rd';
+  ```
+- With authentication plugin (e.g., caching_sha2_password or mysql_native_password):
+  ```
+  CREATE USER 'bob'@'192.0.2.10' IDENTIFIED WITH caching_sha2_password BY 'AnotherP@ss';
+  ```
+- Create user without password (for IAM/SSL auth):
+  ```
+  CREATE USER 'svc'@'10.0.0.0/255.255.255.0' IDENTIFIED WITH auth_socket;
+  ```
+
+### Alter user / change password / auth plugin
+- Change password (MySQL 8+):
+  ```
+  ALTER USER 'alice'@'%' IDENTIFIED BY 'N3wSecur3P@ss';
+  ```
+- Set plugin:
+  ```
+  ALTER USER 'alice'@'%' IDENTIFIED WITH mysql_native_password BY 'P@ss';
+  ```
+- Drop password (no-login):
+  ```
+  ALTER USER 'temp'@'%' ACCOUNT LOCK;
+  ```
+- Unlock account:
+  ```
+  ALTER USER 'temp'@'%' ACCOUNT UNLOCK;
+  ```
+
+### Grant privileges
+- Grant all privileges on a database:
+  ```
+  GRANT ALL PRIVILEGES ON mydb.* TO 'alice'@'%';
+  ```
+- Grant specific privileges:
+  ```
+  GRANT SELECT, INSERT, UPDATE, DELETE ON mydb.* TO 'reporter'@'10.0.0.5';
+  ```
+- Grant with grant option (allow user to grant):
+  ```
+  GRANT ALL PRIVILEGES ON mydb.* TO 'dba'@'%' WITH GRANT OPTION;
+  ```
+- Grant global privileges:
+  ```
+  GRANT REPLICATION SLAVE ON *.* TO 'repl'@'replica-host' IDENTIFIED BY 'replpass';
+  ```
+
+### Revoke privileges
+- Revoke specific:
+  ```
+  REVOKE INSERT, UPDATE ON mydb.* FROM 'reporter'@'10.0.0.5';
+  ```
+- Revoke all:
+  ```
+  REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'alice'@'%';
+  ```
+
+### Drop user
+- Remove user completely:
+  ```
+  DROP USER 'alice'@'%';
+  ```
+- Drop multiple:
+  ```
+  DROP USER 'a'@'%', 'b'@'localhost';
+  ```
+
+### Create role, grant role privileges (MySQL 8+)
+- Create role and grant privileges to role:
+  ```
+  CREATE ROLE 'read_only';
+  GRANT SELECT ON mydb.* TO 'read_only';
+  ```
+- Grant role to user:
+  ```
+  GRANT 'read_only' TO 'bob'@'%';
+  ```
+- Set default role:
+  ```
+  SET DEFAULT ROLE 'read_only' TO 'bob'@'%';
+  ```
+- Revoke role:
+  ```
+  REVOKE 'read_only' FROM 'bob'@'%';
+  ```
+
+### Show privileges and roles
+- Show global privileges available:
+  ```
+  SHOW PRIVILEGES;
+  ```
+- Show roles granted to a user:
+  ```
+  SELECT * FROM mysql.role_edges WHERE to_user='bob' AND to_host='%';
+  ```
+- Show activated roles (within session):
+  ```
+  SELECT CURRENT_ROLE();
+  ```
+
+### Flush privileges & refresh
+- Reload grant tables:
+  ```
+  FLUSH PRIVILEGES;
+  ```
+
+### Temporary / limited access
+- Create user with expired password forcing reset on first login:
+  ```
+  CREATE USER 'temp'@'%' IDENTIFIED BY 'InitP@ss';
+  ALTER USER 'temp'@'%' PASSWORD EXPIRE;
+  ```
+- Create user with limited validity (account locking via expiry):
+  ```
+  ALTER USER 'temp'@'%' PASSWORD EXPIRE INTERVAL 30 DAY;
+  ```
+
+### Host matching examples
+- Local only:
+  ```
+  CREATE USER 'localonly'@'localhost' IDENTIFIED BY 'pw';
+  ```
+- Specific IP:
+  ```
+  CREATE USER 'svc'@'192.0.2.10' IDENTIFIED BY 'pw';
+  ```
+- CIDR-like using range via multiple entries (no native CIDR):
+  ```
+  CREATE USER 'u'@'10.0.0.1' IDENTIFIED BY 'pw';
+  CREATE USER 'u'@'10.0.0.2' IDENTIFIED BY 'pw';
+  ```
+- Wildcard host:
+  ```
+  CREATE USER 'web'@'%.example.com' IDENTIFIED BY 'pw';
+  ```
+
+### SSL / TLS account options
+- Require SSL for user:
+  ```
+  CREATE USER 'secure'@'%' IDENTIFIED BY 'pw' REQUIRE SSL;
+  ```
+- Require subject or issuer (for client certs):
+  ```
+  ALTER USER 'secure'@'%' REQUIRE X509;
+  ```
+
+### Proxy / replication users
+- Replication user:
+  ```
+  CREATE USER 'repl'@'%' IDENTIFIED BY 'replpass';
+  GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'repl'@'%';
+  ```
+
+### Inspect privileges across DBs/tables (useful queries)
+- Find users with global privileges:
+  ```
+  SELECT User,Host FROM mysql.user
+  WHERE (Select_priv='Y' OR Insert_priv='Y' OR Update_priv='Y' OR Delete_priv='Y' OR Create_priv='Y' OR Drop_priv='Y' OR Grant_priv='Y' OR Super_priv='Y');
+  ```
+- List users and their databases/tables grants:
+  ```
+  SELECT grantee, table_schema, privilege_type
+  FROM information_schema.role_table_grants
+  WHERE grantee IS NOT NULL;
+  ```
+
+### Password policy & account locking
+- Show validate_password plugin variables:
+  ```
+  SHOW VARIABLES LIKE 'validate_password%';
+  ```
+- Enforce password expiration policy:
+  ```
+  ALTER USER 'alice'@'%' PASSWORD EXPIRE INTERVAL 90 DAY;
+  ```
+
+### Administrative commands (user maintenance)
+- Rename user:
+  ```
+  RENAME USER 'old'@'%' TO 'new'@'%';
+  ```
+- Rename and change host:
+  ```
+  RENAME USER 'bob'@'localhost' TO 'bob'@'192.0.2.5';
+  ```
+- Check authentication method for users:
+  ```
+  SELECT User,Host,plugin FROM mysql.user;
+  ```
+
+### Backup & restore user grants
+- Dump grants for a user (generate SQL to recreate):
+  ```
+  mysqldump --no-data --routines --triggers --events --databases mysql | sed -n '/CREATE USER/,/UNLOCK/p'
+  ```
+- Simpler: use SHOW GRANTS to capture and save:
+  ```
+  mysql -u root -p -N -e "SHOW GRANTS FOR 'alice'@'%';" > alice_grants.sql
+  ```
+
+### Examples: common workflows
+- Create app user with only DB access:
+  ```
+  CREATE DATABASE appdb CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  CREATE USER 'appuser'@'%' IDENTIFIED BY 'AppP@ss';
+  GRANT SELECT, INSERT, UPDATE, DELETE ON appdb.* TO 'appuser'@'%';
+  FLUSH PRIVILEGES;
+  ```
+- Create readonly reporting user:
+  ```
+  CREATE USER 'report'@'10.0.0.0/255.255.255.0' IDENTIFIED BY 'RptP@ss';
+  GRANT SELECT ON appdb.* TO 'report'@'10.0.0.0';
+  ```
+
+### Security checklist for users
+- Avoid GRANT ALL on *.* to non-admin accounts.
+- Use least privilege: grant only needed DB/table privileges.
+- Prefer role-based access for groups of privileges.
+- Use secure authentication plugins (caching_sha2_password).
+- Enforce SSL/TLS and strong password policies.
+- Rotate credentials and expire service accounts as appropriate.
+
+### Quick reference — command snippets
+- Show all grants for all users:
+  ```
+  SELECT CONCAT('SHOW GRANTS FOR \"', User, '\"@\"', Host, '\";') FROM mysql.user;
+  ```
+  Then run the generated SHOW GRANTS statements.
+
+- Export all user creation + grants:
+  ```
+  mysqldump -u root -p --no-create-info --routines --triggers --events mysql > mysql_users_and_privs.sql
+  ```
+
+End of cheatsheet.
+
+## MySQL — commands to list who accesses/uses data (audit & access inspection)
+
+Save as mysql-access-audit-commands.md. Run inside the mysql client (mysql -u root -p) or prefix queries with sudo mysql -e 'SQL'. These commands help identify which users access databases/tables, their grants, recent connections, and audit logs.
+
+Prerequisite notes (assumptions):
+- You have sufficient privileges (root/administration).
+- For connection/activity history beyond current sessions, enable MySQL general log, audit_log plugin (Enterprise) or use third-party plugins (McAffee/MySQL Audit) or proxy logging.
+
+1) Show all users and their hosts
+```
+SELECT User, Host, plugin FROM mysql.user;
+```
+
+2) Show grants for a specific user
+```
+SHOW GRANTS FOR 'username'@'host';
+-- Example:
+SHOW GRANTS FOR 'appuser'@'%';
+```
+
+3) Generate SHOW GRANTS for every user (outputs commands you can run)
+```
+SELECT CONCAT('SHOW GRANTS FOR \'', User, '\'@\'', Host, '\';') AS show_grant_cmd FROM mysql.user;
+```
+
+4) List users with any global privileges
+```
+SELECT User, Host FROM mysql.user
+WHERE Select_priv='Y' OR Insert_priv='Y' OR Update_priv='Y' OR Delete_priv='Y' OR Create_priv='Y' OR Drop_priv='Y' OR Grant_priv='Y' OR Super_priv='Y';
+```
+
+5) List database/table-level grants (from INFORMATION_SCHEMA)
+```
+SELECT GRANTEE, TABLE_SCHEMA, TABLE_NAME, PRIVILEGE_TYPE
+FROM information_schema.table_privileges
+ORDER BY GRANTEE, TABLE_SCHEMA, TABLE_NAME;
+```
+
+6) List schema-level privileges
+```
+SELECT GRANTEE, TABLE_SCHEMA, PRIVILEGE_TYPE
+FROM information_schema.schema_privileges
+ORDER BY GRANTEE, TABLE_SCHEMA;
+```
+
+7) Find which users can access a specific database
+```
+SELECT DISTINCT GRANTEE
+FROM information_schema.schema_privileges
+WHERE TABLE_SCHEMA = 'your_database';
+```
+
+8) Find which users can access a specific table
+```
+SELECT DISTINCT GRANTEE
+FROM information_schema.table_privileges
+WHERE TABLE_SCHEMA = 'your_database' AND TABLE_NAME = 'your_table';
+```
+
+9) Current active connections / sessions
+```
+SELECT ID, USER, HOST, DB, COMMAND, TIME, STATE, INFO
+FROM INFORMATION_SCHEMA.PROCESSLIST
+ORDER BY TIME DESC;
+-- or using SHOW PROCESSLIST;
+```
+
+10) Recent connection history (requires general_log enabled)
+- Enable general log (temporary; may grow disk usage):
+```
+SET GLOBAL general_log = 'ON';
+SET GLOBAL log_output = 'TABLE';   -- writes to mysql.general_log table
+```
+- Query recent connections/queries:
+```
+SELECT event_time, user_host, argument
+FROM mysql.general_log
+WHERE command_type IN ('Connect','Quit') OR argument LIKE 'SELECT %' OR argument LIKE 'UPDATE %'
+ORDER BY event_time DESC
+LIMIT 200;
+```
+- Disable when done:
+```
+SET GLOBAL general_log = 'OFF';
+```
+
+11) Audit plugin (MySQL Enterprise) — list audit logs
+- Install/enable audit_log plugin (example):
+```
+INSTALL PLUGIN audit_log SONAME 'audit_log.so';
+SET GLOBAL audit_log_policy = 'ALL';
+-- Logs are written to audit.log (file) by default; check plugin docs.
+```
+- Query plugin-configured logs as per deployment.
+
+12) Use performance_schema for connection and statement history
+- Find recent statements (requires instrumenting)
+```
+SELECT EVENT_ID, THREAD_ID, EVENT_NAME, TIMER_START, TIMER_END
+FROM performance_schema.events_statements_history_long
+ORDER BY TIMER_START DESC
+LIMIT 100;
+```
+- Map thread -> user/host:
+```
+SELECT t.THREAD_ID, t.PROCESSLIST_USER, t.PROCESSLIST_HOST, t.PROCESSLIST_DB
+FROM performance_schema.threads t
+WHERE t.PROCESSLIST_USER IS NOT NULL
+ORDER BY t.PROCESSLIST_USER;
+```
+
+13) Find users that can create/drop tables (dangerous privileges)
+```
+SELECT GRANTEE, PRIVILEGE_TYPE, TABLE_SCHEMA
+FROM information_schema.schema_privileges
+WHERE PRIVILEGE_TYPE IN ('CREATE','DROP','ALTER','CREATE ROUTINE','DROP ROUTINE')
+ORDER BY GRANTEE;
+```
+
+14) Find users with GRANT OPTION
+```
+SELECT User, Host FROM mysql.user WHERE Grant_priv='Y';
+```
+
+15) Determine which accounts use SSL or require SSL
+```
+SELECT User, Host, ssl_type, ssl_cipher FROM mysql.user;
+-- or:
+SELECT User, Host FROM mysql.user WHERE ssl_type <> '';
+```
+
+16) Check last password_changed and account_locked info (MySQL 8+)
+```
+SELECT User, Host, password_last_changed, account_locked, password_expired
+FROM mysql.user;
+```
+
+17) Export grants for auditing
+```
+mysql -N -e "SELECT CONCAT('SHOW GRANTS FOR \\'', User, '\\'@\\'', Host, '\\';') FROM mysql.user" | mysql -N | sed 's/$/;/' > all_user_grants.sql
+```
+
+18) Map application users to roles (MySQL 8+ role queries)
+```
+SELECT to_user, to_host, from_user, from_host
+FROM mysql.role_edges;
+```
+
+19) Find users connecting from specific IP ranges
+```
+SELECT User, Host FROM mysql.user WHERE Host LIKE '10.%' OR Host LIKE '192.168.%';
+```
+
+20) Detect users with no password set (insecure)
+```
+SELECT User, Host FROM mysql.user WHERE authentication_string = '' OR authentication_string IS NULL;
+```
+
+21) Monitor failed login attempts (requires logging such as general_log or auth plugin)
+- Enable general_log or review server error log for authentication failures:
+```
+sudo grep -i "Access denied" /var/log/mysql/error.log
+```
+(or /var/log/mysqld.log depending on distro)
+
+22) Create an audit summary view (example)
+```
+CREATE OR REPLACE VIEW audit_user_access AS
+SELECT g.GRANTEE, g.TABLE_SCHEMA, g.TABLE_NAME, GROUP_CONCAT(DISTINCT g.PRIVILEGE_TYPE) AS privileges
+FROM information_schema.table_privileges g
+GROUP BY g.GRANTEE, g.TABLE_SCHEMA, g.TABLE_NAME;
+```
+Then:
+```
+SELECT * FROM audit_user_access WHERE GRANTEE LIKE "'appuser'%";
+```
+
+23) Best-effort script to list users and DBs they can access
+```
+SELECT DISTINCT u.User, u.Host, p.TABLE_SCHEMA
+FROM mysql.user u
+JOIN information_schema.schema_privileges p ON CONCAT("'", u.User, "'@'", u.Host, "'") = p.GRANTEE
+ORDER BY u.User, p.TABLE_SCHEMA;
+```
+
+24) For cloud-managed MySQL (RDS/Aurora): use CloudTrail/CloudWatch logs and enhanced logging features to track connections and queries. Example: enable general log or audit at RDS parameter group and push logs to CloudWatch.
+
+25) Cleanup & best practices
+- Turn off general_log when finished:
+```
+SET GLOBAL general_log = 'OFF';
+```
+- Use audit plugins for production compliance.
+- Regularly export grants and review for least privilege.
+
+End of file.
+
