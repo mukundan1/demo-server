@@ -1,0 +1,127 @@
+Notes: run as a sudo user; replace YOUR_DOMAIN and YOUR_EMAIL. Ensure ports 80/443 are open and DNS for YOUR_DOMAIN points to the server.
+
+Ubuntu / Debian (recommended: snap)
+1) Remove old certbot (if present)
+```
+sudo apt remove -y certbot
+```
+2) Install snapd and Certbot
+```
+sudo apt update
+sudo apt install -y snapd
+sudo snap install core
+sudo snap refresh core
+sudo snap install --classic certbot
+sudo ln -s /snap/bin/certbot /usr/bin/certbot
+```
+3) Obtain and install certificate (nginx or apache)
+- For Nginx (Certbot will edit config & reload)
+```
+sudo certbot --nginx -d YOUR_DOMAIN -m YOUR_EMAIL --agree-tos --no-eff-email
+```
+- For Apache
+```
+sudo certbot --apache -d YOUR_DOMAIN -m YOUR_EMAIL --agree-tos --no-eff-email
+```
+- Standalone (when no webserver or to temporarily stop it)
+```
+sudo certbot certonly --standalone -d YOUR_DOMAIN -m YOUR_EMAIL --agree-tos --no-eff-email
+```
+
+CentOS / RHEL / Fedora / Rocky / AlmaLinux (snap)
+1) Install snapd (example for CentOS/RHEL 8/9)
+```
+sudo dnf install -y epel-release
+sudo dnf install -y snapd
+sudo systemctl enable --now snapd.socket
+sudo ln -s /var/lib/snapd/snap /snap
+sudo snap install core
+sudo snap refresh core
+sudo snap install --classic certbot
+sudo ln -s /snap/bin/certbot /usr/bin/certbot
+```
+2) Use same certbot commands as Ubuntu for --nginx, --apache, or --standalone.
+
+Amazon Linux 2
+1) Enable snap (if available) or use EFF instructions; recommended: snap
+```
+sudo yum install -y snapd
+sudo systemctl enable --now snapd.socket
+sudo ln -s /var/lib/snapd/snap /snap
+sudo snap install core
+sudo snap refresh core
+sudo snap install --classic certbot
+sudo ln -s /snap/bin/certbot /usr/bin/certbot
+```
+2) Obtain cert:
+```
+sudo certbot --nginx -d YOUR_DOMAIN -m YOUR_EMAIL --agree-tos --no-eff-email
+```
+(or use --standalone/certonly as above)
+
+Alternative: pip install (only if snap unavailable; unsupported edge cases)
+```
+python3 -m venv ~/certbot-venv
+source ~/certbot-venv/bin/activate
+pip install --upgrade pip
+pip install certbot
+# run certbot from the venv:
+sudo ~/certbot-venv/bin/certbot certonly --standalone -d YOUR_DOMAIN -m YOUR_EMAIL --agree-tos --no-eff-email
+```
+
+Obtain wildcard certificate via DNS challenge (requires DNS API or manual TXT)
+- With DNS plugin (example for Cloudflare; install plugin and set environment vars)
+```
+sudo snap install --classic certbot
+# install Cloudflare plugin via pip in venv or distro package if available
+# Example using certbot-dns-cloudflare via pip:
+python3 -m venv ~/certbot-venv
+source ~/certbot-venv/bin/activate
+pip install certbot certbot-dns-cloudflare
+# Create ~/.secrets/certbot/cloudflare.ini with API token and chmod 600
+sudo ~/certbot-venv/bin/certbot certonly --dns-cloudflare --dns-cloudflare-credentials ~/.secrets/certbot/cloudflare.ini -d '*.YOUR_DOMAIN' -d 'YOUR_DOMAIN' -m YOUR_EMAIL --agree-tos --no-eff-email
+```
+- Manual DNS:
+```
+sudo certbot certonly --manual --preferred-challenges dns -d '*.YOUR_DOMAIN' -d 'YOUR_DOMAIN' -m YOUR_EMAIL --agree-tos --no-eff-email
+```
+Certbot will prompt for TXT records to add.
+
+Renewal and automation
+- Certbot snap installs a systemd timer/cron for renewal. Test renewal:
+```
+sudo certbot renew --dry-run
+```
+- If using certonly or custom services, reload your service after renewal (example nginx):
+```
+sudo systemctl reload nginx
+```
+Create a hook to reload automatically (example for certbot renew --deploy-hook):
+```
+sudo certbot renew --deploy-hook "systemctl reload nginx"
+```
+Or add deploy-hook to cron/systemd timer.
+
+Locations
+- Certificates: /etc/letsencrypt/live/YOUR_DOMAIN/fullchain.pem and privkey.pem
+
+Troubleshooting quick commands
+- Check certbot version:
+```
+certbot --version
+```
+- Test dry-run:
+```
+sudo certbot renew --dry-run
+```
+- If ports blocked, use --standalone after stopping webserver:
+```
+sudo systemctl stop nginx
+sudo certbot certonly --standalone -d YOUR_DOMAIN
+sudo systemctl start nginx
+```
+
+If you want a one-line example (Ubuntu, nginx, snap):
+```
+sudo apt update && sudo apt install -y snapd && sudo snap install core && sudo snap refresh core && sudo snap install --classic certbot && sudo ln -s /snap/bin/certbot /usr/bin/certbot && sudo certbot --nginx -d YOUR_DOMAIN -m YOUR_EMAIL --agree-tos --no-eff-email
+```

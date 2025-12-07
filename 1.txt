@@ -1,0 +1,362 @@
+## ec2-deploy-all-in-one.sh
+
+Save as ec2-deploy-all-in-one.sh, edit variables at top, make executable (chmod +x), run on a fresh EC2 instance as a sudo-capable user. This is a comprehensive, opinionated collection of commands to bootstrap, secure, deploy common web apps, add TLS, enable logging, backups, and basic monitoring. It assumes Debian/Ubuntu or Amazon Linux 2; where behavior differs the script auto-detects and runs the appropriate commands. Replace placeholders (KEY, DOMAIN, EMAIL, APP_REPO, etc.) before running.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$'\n\t'
+
+# ---------- CONFIGURE THESE ----------
+INSTANCE_USER="${INSTANCE_USER:-ubuntu}"   # ubuntu, ec2-user, centos, etc.
+SSH_KEY="${SSH_KEY:-/path/to/KEY.pem}"     # local key path (for SSH examples)
+REGION="${REGION:-us-east-1}"
+DOMAIN="${DOMAIN:-example.com}"
+EMAIL="${EMAIL:-admin@example.com}"
+APP_REPO="${APP_REPO:-}"                   # optional git repo to clone
+APP_DIR="${APP_DIR:-/opt/app}"
+NODE_VERSION="${NODE_VERSION:-18}"         # Node version if needed
+PYTHON_VENV="${PYTHON_VENV:-/opt/venv}"
+SWAP_SIZE="${SWAP_SIZE:-2G}"               # swap if small instance
+ENABLE_FAIL2BAN="${ENABLE_FAIL2BAN:-yes}"
+ENABLE_UFW="${ENABLE_UFW:-yes}"            # for Ubuntu; firewalld used otherwise
+# -------------------------------------
+
+LOG() { echo "==> $*"; }
+
+# Utility: detect distro
+detect_distro() {
+  if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    echo "${ID_LIKE:-$ID}"
+  else
+    echo "unknown"
+  fi
+}
+
+DISTRO=$(detect_distro)
+LOG "Detected distro: $DISTRO"
+
+# Update & essential packages
+LOG "Updating system and installing essentials"
+if echo "$DISTRO" | grep -qi "debian\|ubuntu"; then
+  sudo apt update
+  sudo apt upgrade -y
+  sudo apt install -y git curl wget ca-certificates gnupg lsb-release build-essential apt-transport-https software-properties-common jq unzip
+elif echo "$DISTRO" | grep -qi "rhel\|fedora\|centos\|amzn"; then
+  if command -v dnf >/dev/null 2>&1; then
+    sudo dnf upgrade -y
+    sudo dnf install -y git curl wget ca-certificates lsb-release jq unzip gcc make
+  else
+    sudo yum update -y
+    sudo yum install -y git curl wget ca-certificates jq unzip gcc make
+  fi
+else
+  LOG "Unknown distro; attempting apt"
+  sudo apt update || true
+  sudo apt install -y git curl wget ca-certificates jq unzip || true
+fi
+
+# Create app user (non-root) if not exists
+APP_USER="${APP_USER:-www-data}"
+if ! id -u "$APP_USER" >/dev/null 2>&1; then
+  LOG "Creating user $APP_USER"
+  sudo useradd -m -s /bin/bash "$APP_USER" || true
+fi
+
+# Basic security: time sync
+LOG "Ensuring time sync"
+if command -v timedatectl >/dev/null 2>&1; then
+  sudo timedatectl set-ntp true || true
+fi
+
+# Add swap if low memory
+MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+MEM_MB=$((MEM_KB/1024))
+if [ "$MEM_MB" -lt 2000 ]; then
+  LOG "Adding swapfile ($SWAP_SIZE) because memory is ${MEM_MB}MB"
+  sudo fallocate -l "$SWAP_SIZE" /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile
+  sudo swapon /swapfile
+  sudo bash -c 'grep -qF "/swapfile" /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab'
+fi
+
+# Install Docker (optional but useful)
+LOG "Installing Docker"
+if ! command -v docker >/dev/null 2>&1; then
+  if echo "$DISTRO" | grep -qi "debian\|ubuntu"; then
+    curl -fsSL https://get.docker.com | sudo sh
+    sudo usermod -aG docker "$APP_USER" || true
+  else
+    curl -fsSL https://get.docker.com | sudo sh
+    sudo usermod -aG docker "$APP_USER" || true
+  fi
+fi
+
+# Install nginx and/or apache
+LOG "Installing NGINX"
+if echo "$DISTRO" | grep -qi "debian\|ubuntu"; then
+  sudo apt install -y nginx
+elif echo "$DISTRO" | grep -qi "rhel\|centos\|amzn\|fedora"; then
+  if command -v dnf >/dev/null 2>&1; then
+    sudo dnf install -y nginx || sudo dnf install -y nginx-mod-http-perl
+  else
+    sudo yum install -y nginx
+  fi
+fi
+sudo systemctl enable --now nginx
+
+# Install Node.js (NodeSource)
+if [ -n "$APP_REPO" ] || true; then
+  LOG "Installing Node.js $NODE_VERSION"
+  if echo "$DISTRO" | grep -qi "debian\|ubuntu"; then
+    curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | sudo -E bash -
+    sudo apt install -y nodejs
+  else
+    curl -fsSL https://rpm.nodesource.com/setup_${NODE_VERSION}.x | sudo bash -
+    if command -v dnf >/dev/null 2>&1; then
+      sudo dnf install -y nodejs
+    else
+      sudo yum install -y nodejs
+    fi
+  fi
+fi
+
+# Install Python3, pip, venv
+LOG "Installing Python 3 and pip"
+if echo "$DISTRO" | grep -qi "debian\|ubuntu"; then
+  sudo apt install -y python3 python3-venv python3-pip
+else
+  if command -v dnf >/dev/null 2>&1; then
+    sudo dnf install -y python3 python3-venv python3-pip
+  else
+    sudo yum install -y python3 python3-venv python3-pip
+  fi
+fi
+
+# Install PM2 for Node process management and/or gunicorn for Python
+LOG "Installing PM2 and gunicorn"
+sudo npm install -g pm2 || true
+sudo pip3 install --upgrade pip setuptools wheel
+sudo pip3 install gunicorn
+
+# Setup UFW or firewalld
+if echo "$DISTRO" | grep -qi "debian\|ubuntu"; then
+  if [ "$ENABLE_UFW" = "yes" ]; then
+    LOG "Configuring UFW"
+    sudo apt install -y ufw
+    sudo ufw allow OpenSSH
+    sudo ufw allow 'Nginx Full'
+    sudo ufw --force enable
+  fi
+else
+  LOG "Configuring firewalld (if present)"
+  if command -v firewall-cmd >/dev/null 2>&1; then
+    sudo systemctl enable --now firewalld
+    sudo firewall-cmd --permanent --add-service=http
+    sudo firewall-cmd --permanent --add-service=https
+    sudo firewall-cmd --permanent --add-service=ssh
+    sudo firewall-cmd --reload
+  fi
+fi
+
+# Fail2ban
+if [ "${ENABLE_FAIL2BAN:-yes}" = "yes" ]; then
+  LOG "Installing fail2ban"
+  if echo "$DISTRO" | grep -qi "debian\|ubuntu"; then
+    sudo apt install -y fail2ban
+  else
+    if command -v dnf >/dev/null 2>&1; then
+      sudo dnf install -y fail2ban
+    else
+      sudo yum install -y fail2ban
+    fi
+  fi
+  sudo systemctl enable --now fail2ban || true
+fi
+
+# Setup directories and permissions
+LOG "Preparing app directory $APP_DIR"
+sudo mkdir -p "$APP_DIR"
+sudo chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
+sudo chmod 755 "$APP_DIR"
+
+# Optional: clone app repo
+if [ -n "$APP_REPO" ]; then
+  LOG "Cloning repo $APP_REPO into $APP_DIR"
+  sudo -u "$APP_USER" git clone "$APP_REPO" "$APP_DIR" || (cd "$APP_DIR" && sudo -u "$APP_USER" git pull)
+fi
+
+# Example Node app setup (if package.json exists)
+if [ -f "${APP_DIR}/package.json" ]; then
+  LOG "Installing Node app deps and starting with PM2"
+  sudo chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
+  sudo -u "$APP_USER" bash -lc "cd $APP_DIR && npm install --production"
+  sudo -u "$APP_USER" pm2 start --name app "$APP_DIR"/index.js || sudo -u "$APP_USER" pm2 start --name app npm -- start
+  sudo -u "$APP_USER" pm2 startup systemd -u "$APP_USER" --hp "/home/$APP_USER" || true
+  sudo -u "$APP_USER" pm2 save
+fi
+
+# Example Python app setup (if requirements.txt exists)
+if [ -f "${APP_DIR}/requirements.txt" ]; then
+  LOG "Setting up Python venv and gunicorn systemd service"
+  sudo -u "$APP_USER" python3 -m venv "$PYTHON_VENV"
+  sudo -u "$APP_USER" bash -lc "source $PYTHON_VENV/bin/activate && pip install -r $APP_DIR/requirements.txt"
+  SERVICE_FILE="/etc/systemd/system/app.service"
+  sudo bash -c "cat > $SERVICE_FILE <<'SERVICE'
+[Unit]
+Description=Gunicorn App
+After=network.target
+
+[Service]
+User=$APP_USER
+Group=$APP_USER
+WorkingDirectory=$APP_DIR
+Environment=PATH=$PYTHON_VENV/bin
+ExecStart=$PYTHON_VENV/bin/gunicorn --workers 3 --bind 127.0.0.1:8000 wsgi:app
+
+[Install]
+WantedBy=multi-user.target
+SERVICE"
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now app.service
+fi
+
+# NGINX reverse proxy config (generic)
+LOG "Configuring nginx reverse proxy for app"
+NGINX_CONF="/etc/nginx/sites-available/app"
+if [ ! -f "$NGINX_CONF" ]; then
+  sudo bash -c "cat > $NGINX_CONF <<'NGINX'
+server {
+    listen 80;
+    server_name __DOMAIN__;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;   # change to :3000 for Node
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
+    }
+}
+NGINX"
+  sudo sed -i "s|__DOMAIN__|${DOMAIN}|g" "$NGINX_CONF"
+  if [ -d /etc/nginx/sites-enabled ]; then
+    sudo ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/app
+  else
+    sudo ln -sf "$NGINX_CONF" /etc/nginx/conf.d/app.conf
+  fi
+  sudo nginx -t && sudo systemctl reload nginx
+fi
+
+# Certbot installation using snap (recommended)
+LOG "Installing certbot (snap) and obtaining certificates for $DOMAIN"
+if ! command -v certbot >/dev/null 2>&1; then
+  if echo "$DISTRO" | grep -qi "debian\|ubuntu"; then
+    sudo apt remove -y certbot || true
+    sudo apt install -y snapd
+    sudo snap install core
+    sudo snap refresh core
+    sudo snap install --classic certbot
+    sudo ln -sf /snap/bin/certbot /usr/bin/certbot
+  else
+    # RHEL/CentOS/Amazon Linux
+    if command -v dnf >/dev/null 2>&1; then
+      sudo dnf install -y epel-release || true
+    else
+      sudo yum install -y epel-release || true
+    fi
+    sudo yum install -y snapd || sudo dnf install -y snapd || true
+    sudo systemctl enable --now snapd.socket || true
+    sudo ln -s /var/lib/snapd/snap /snap || true
+    sudo snap install core || true
+    sudo snap refresh core || true
+    sudo snap install --classic certbot || true
+    sudo ln -sf /snap/bin/certbot /usr/bin/certbot || true
+  fi
+fi
+
+# Attempt to get a certificate using the nginx plugin
+# If nginx accessible and domain points to this server, this will succeed
+if certbot --nginx -d "$DOMAIN" -m "$EMAIL" --agree-tos --non-interactive --no-eff-email; then
+  LOG "Successfully obtained TLS cert for $DOMAIN (nginx plugin)"
+else
+  LOG "Certbot nginx plugin failed — trying standalone (stopping nginx temporarily)"
+  sudo systemctl stop nginx || true
+  certbot certonly --standalone -d "$DOMAIN" -m "$EMAIL" --agree-tos --non-interactive --no-eff-email || {
+    LOG "Standalone certbot failed; please check DNS and ports 80/443"
+  }
+  sudo systemctl start nginx || true
+fi
+
+# Ensure automatic renewal and reload nginx on renew
+LOG "Configuring automated reload on renewal"
+sudo bash -c 'cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh <<'"'"'SH'"'"'
+#!/bin/bash
+systemctl reload nginx
+SH
+sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+
+# Test renewal
+sudo certbot renew --dry-run || true
+
+# Backup: simple snapshot/rsync script
+LOG "Installing restic for backups (optional)"
+if ! command -v restic >/dev/null 2>&1; then
+  if echo "$DISTRO" | grep -qi "debian\|ubuntu"; then
+    sudo apt install -y restic || true
+  else
+    if command -v dnf >/dev/null 2>&1; then
+      sudo dnf install -y restic || true
+    else
+      sudo yum install -y restic || true
+    fi
+  fi
+fi
+
+BACKUP_SCRIPT="/usr/local/bin/backup-site.sh"
+sudo bash -c "cat > $BACKUP_SCRIPT <<'BACKUP'
+#!/usr/bin/env bash
+set -e
+# Example: rsync webroot to remote host (configure REMOTE and PATH)
+REMOTE=\"user@backup.example.com\"
+REMOTE_PATH=\"/backups/\$(hostname -s)/\$(date +%F)\"
+rsync -a --delete /var/www/html/ \"\$REMOTE:\$REMOTE_PATH\"
+BACKUP"
+sudo chmod +x "$BACKUP_SCRIPT"
+
+# Basic monitoring: install netdata (lightweight)
+LOG "Installing Netdata for basic monitoring"
+bash <(curl -Ss https://my-netdata.io/kickstart.sh) --dont-wait || true
+
+# Logs and troubleshooting commands (printed for convenience)
+cat > /tmp/EC2-commands.txt <<'EOF'
+# Useful commands
+sudo systemctl status nginx
+sudo journalctl -u nginx -f
+sudo tail -n 200 /var/log/nginx/error.log
+sudo tail -n 200 /var/log/nginx/access.log
+sudo certbot certificates
+sudo certbot renew --dry-run
+ss -tulpn | grep -E 'nginx|node|gunicorn|docker'
+docker ps -a
+pm2 list
+EOF
+sudo chown "$USER":"$USER" /tmp/EC2-commands.txt
+LOG "Saved useful commands to /tmp/EC2-commands.txt"
+
+# Final permissions and cleanup
+sudo chown -R "$APP_USER":"$APP_USER" "$APP_DIR" || true
+LOG "Deployment bootstrap complete. Please check:"
+echo " - NGINX: sudo systemctl status nginx"
+echo " - Certbot certs: sudo certbot certificates"
+echo " - App directory: $APP_DIR"
+echo " - Logs: /var/log/nginx/*"
+```
+
+Notes:
+- Edit variables at top before running.
+- This script covers a broad set of tasks; adapt sections you don't need.
+- For production, review security, IAM roles, VPC/subnet, instance profiles, and backups appropriate to your environment.
