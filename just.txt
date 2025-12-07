@@ -1,0 +1,225 @@
+## Deploy a web server on an AMI/Ubuntu instance
+
+This document lists commands and short instructions to deploy a simple web server (NGINX and a basic static site) on an Amazon Linux AMI or Ubuntu server. Use the appropriate section for your OS. Save this file as deploy-web-server.md.
+
+---
+
+## Quick notes
+- Run commands as a user with sudo privileges.
+- For Amazon Linux AMI, use the "Amazon Linux" section. For Ubuntu, use the "Ubuntu" section.
+- Replace example values (e.g., YOUR_DOMAIN, /var/www/html/index.html) as needed.
+- Open port 80 (and 443 if using TLS) in your instance security group.
+
+---
+
+## Amazon Linux (Amazon Linux AMI / Amazon Linux 2)
+
+### 1. Update system
+```bash
+sudo yum update -y
+```
+
+### 2. Install NGINX
+```bash
+sudo amazon-linux-extras install nginx1 -y    # Amazon Linux 2
+# or on older Amazon Linux:
+# sudo yum install nginx -y
+```
+
+### 3. Start and enable NGINX
+```bash
+sudo systemctl start nginx
+sudo systemctl enable nginx
+sudo systemctl status nginx
+```
+
+### 4. Deploy a simple static site
+```bash
+sudo mkdir -p /usr/share/nginx/html
+echo "<!doctype html><html><head><meta charset='utf-8'><title>Welcome</title></head><body><h1>It works (Amazon Linux)</h1></body></html>" | sudo tee /usr/share/nginx/html/index.html
+```
+
+### 5. Adjust SELinux/firewall (if applicable)
+Amazon Linux typically does not enable SELinux by default. If using firewalld:
+```bash
+sudo systemctl start firewalld
+sudo firewall-cmd --add-service=http --permanent
+sudo firewall-cmd --add-service=https --permanent
+sudo firewall-cmd --reload
+```
+
+### 6. (Optional) Install certbot for HTTPS (Let's Encrypt)
+```bash
+sudo yum install -y certbot python2-certbot-nginx
+sudo certbot --nginx -d YOUR_DOMAIN
+```
+
+---
+
+## Ubuntu (18.04, 20.04, 22.04, 24.04)
+
+### 1. Update system
+```bash
+sudo apt update
+sudo apt upgrade -y
+```
+
+### 2. Install NGINX
+```bash
+sudo apt install -y nginx
+```
+
+### 3. Start and enable NGINX
+```bash
+sudo systemctl start nginx
+sudo systemctl enable nginx
+sudo systemctl status nginx
+```
+
+### 4. Deploy a simple static site
+```bash
+sudo mkdir -p /var/www/html
+echo "<!doctype html><html><head><meta charset='utf-8'><title>Welcome</title></head><body><h1>It works (Ubuntu)</h1></body></html>" | sudo tee /var/www/html/index.html
+sudo chown -R www-data:www-data /var/www/html
+```
+
+### 5. Allow HTTP/HTTPS through UFW (Ubuntu's firewall)
+```bash
+sudo ufw allow 'Nginx Full'
+sudo ufw enable
+sudo ufw status
+```
+
+### 6. (Optional) Install certbot for HTTPS (Let's Encrypt)
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d YOUR_DOMAIN
+```
+
+---
+
+## Alternative: Install Apache (Ubuntu & Amazon Linux)
+
+### 1. Install Apache on Ubuntu
+```bash
+sudo apt update
+sudo apt install -y apache2
+sudo systemctl start apache2
+sudo systemctl enable apache2
+echo "<!doctype html><html><head><meta charset='utf-8'><title>Apache</title></head><body><h1>It works (Apache)</h1></body></html>" | sudo tee /var/www/html/index.html
+sudo chown -R www-data:www-data /var/www/html
+```
+
+### 2. Install Apache on Amazon Linux
+```bash
+sudo yum install -y httpd
+sudo systemctl start httpd
+sudo systemctl enable httpd
+echo "<!doctype html><html><head><meta charset='utf-8'><title>Apache</title></head><body><h1>It works (Apache)</h1></body></html>" | sudo tee /var/www/html/index.html
+```
+
+### 3. Open firewall ports as needed (see earlier firewall sections)
+
+---
+
+## Deploying a Node.js app (Ubuntu & Amazon Linux)
+
+### 1. Install Node.js (example: Node 18 via NodeSource)
+```bash
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -     # Ubuntu
+# For Amazon Linux:
+# curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
+sudo apt install -y nodejs   # Ubuntu
+# sudo yum install -y nodejs # Amazon Linux (if using the rpm setup)
+```
+
+### 2. Create app
+```bash
+mkdir -p ~/myapp
+cat > ~/myapp/index.js <<'NODE'
+const http = require('http');
+const port = process.env.PORT || 3000;
+const server = http.createServer((req, res) => {
+  res.writeHead(200, {'Content-Type':'text/html'});
+  res.end('<h1>Hello from Node.js</h1>');
+});
+server.listen(port, () => console.log(`Listening on ${port}`));
+NODE
+```
+
+### 3. Install PM2 to run app as a service
+```bash
+sudo npm install -g pm2
+cd ~/myapp
+pm2 start index.js --name myapp
+pm2 startup systemd
+pm2 save
+```
+
+### 4. Configure NGINX as a reverse proxy (example)
+```bash
+sudo tee /etc/nginx/sites-available/myapp <<'NGINX'
+server {
+    listen 80;
+    server_name YOUR_DOMAIN;
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+NGINX
+
+sudo ln -s /etc/nginx/sites-available/myapp /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+---
+
+## Common post-deploy checks
+- Verify service status:
+  - sudo systemctl status nginx
+  - sudo systemctl status httpd (Apache)
+  - pm2 status (Node apps)
+- Test from remote machine:
+  - curl -I http://YOUR_INSTANCE_PUBLIC_IP
+- Check ports:
+  - sudo ss -tulpn | grep -E 'nginx|httpd|node'
+
+---
+
+## Troubleshooting tips (brief)
+- NGINX config test: sudo nginx -t
+- View logs:
+  - NGINX: /var/log/nginx/error.log, /var/log/nginx/access.log
+  - Apache: /var/log/apache2/error.log (Ubuntu) or /var/log/httpd/error_log (Amazon Linux)
+  - Systemd journal: sudo journalctl -u nginx -f
+- Permissions: ensure web files owned by www-data (Ubuntu) or nginx/httpd user.
+
+---
+
+## Example one-line commands (quick)
+- Install NGINX and deploy a page (Ubuntu):
+```bash
+sudo apt update && sudo apt install -y nginx && echo "<h1>It works</h1>" | sudo tee /var/www/html/index.html && sudo systemctl enable --now nginx
+```
+
+- Install Node, PM2, start app (Ubuntu):
+```bash
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - && sudo apt install -y nodejs && sudo npm install -g pm2 && mkdir -p ~/myapp && cat > ~/myapp/index.js <<'NODE'\nconst http = require('http');const port = 3000;const server = http.createServer((req,res)=>{res.writeHead(200,{'Content-Type':'text/html'});res.end('<h1>Node</h1>');});server.listen(port,()=>console.log(`listening`));\nNODE\npm2 start ~/myapp/index.js --name myapp && pm2 startup systemd && pm2 save
+```
+
+---
+
+## References
+- NGINX docs: https://nginx.org
+- Certbot: https://certbot.eff.org
+- PM2: https://pm2.keymetrics.io
+
+---
+
+End of file.
